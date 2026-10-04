@@ -1,0 +1,274 @@
+@import "tailwindcss";
+
+/*
+  HEYCAT COFFEE SHOP — design system
+  --------------------------------------------------------------------------
+  Every colour here was sampled from HeyCat's own photography and print, not
+  chosen from a cat-café palette. The café is warm Mediterranean: cream plaster,
+  walnut, travertine, oxidised-copper counter, gold LED wash, black steel
+  windows. The play lives in the details, never in a pastel wash.
+*/
+
+@theme {
+  /* Surfaces — the cream is the exact background of HeyCat's own cat cards. */
+  --color-cream: #f9f4ee;
+  --color-shell: #f2eae0;
+  --color-sand: #e8dccc;
+  --color-linen: #ded0bd;
+
+  /* Ink — espresso rather than black; the brand never prints true black on cream. */
+  --color-espresso: #241610;
+  --color-cocoa: #43291a;
+  --color-taupe: #7b6552;
+  --color-mist: #a08f7e;
+
+  /* Accents — gold is the LED wash along the counter, rust the counter itself. */
+  --color-gold: #b8862b;
+  --color-rust: #8c4a26;
+  --color-walnut: #69310e;
+
+  /* Flavour marks, lifted straight from HeyCat's own drink posters. */
+  --color-matcha: #4e6b2e;
+  --color-hibiscus: #8e1b2e;
+  --color-berry: #c22a45;
+  --color-ube: #46256e;
+  --color-citrus: #d2711f;
+  --color-banana: #c79a22;
+
+  --font-display: var(--font-playfair), Georgia, "Times New Roman", serif;
+  --font-brand: var(--font-fredoka), ui-rounded, "Segoe UI", system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-hand: var(--font-caveat), ui-rounded, cursive;
+  /* Playfair and Fredoka carry no Arabic, so Arabic falls through to the
+     system's own faces rather than to a box-drawing fallback. */
+  --font-arabic:
+    "Noto Naskh Arabic", "Segoe UI", "Geeza Pro", "Times New Roman", serif;
+
+  /* One motion vocabulary: slow, weighted, never bouncy. */
+  --ease-drift: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-settle: cubic-bezier(0.16, 0.84, 0.44, 1);
+
+  /* The fixed masthead's height, measured: 1rem padding top and bottom around
+     the logo lockup. Anything that has to clear the header derives from this,
+     so the offset is declared once and cannot drift out of sync. */
+  --header-h: 5.5rem;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    /*
+      Clear the fixed masthead when jumping to a section, plus a little air.
+      This is the ONLY place the offset is set — sections must not also carry a
+      `scroll-mt-*`, because scroll-padding and scroll-margin add up and the
+      target lands a header's height too low.
+    */
+    scroll-padding-top: calc(var(--header-h) + 1rem);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /*
+    Arabic: the display serif has no Arabic coverage, so headings and body both
+    fall back to a face that does. Set on :lang rather than [dir] so a stray
+    Arabic phrase inside a French page is also handled.
+  */
+  :lang(ar) {
+    font-family: var(--font-arabic);
+  }
+
+  :lang(ar) h1,
+  :lang(ar) h2,
+  :lang(ar) h3 {
+    font-family: var(--font-arabic);
+    letter-spacing: 0;
+  }
+
+  /* Latin brand marks keep their own face even on an Arabic page. */
+  :lang(ar) .font-brand,
+  [dir="rtl"] .font-brand {
+    font-family: var(--font-brand);
+  }
+
+  body {
+    background-color: var(--color-cream);
+    color: var(--color-espresso);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--color-espresso);
+    color: var(--color-cream);
+  }
+
+  /* One focus ring everywhere, dark enough to read on cream and on photography. */
+  :focus-visible {
+    outline: 2px solid var(--color-espresso);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+}
+
+@layer components {
+  /*
+    The eyebrow: letterspaced small caps, the same device HeyCat sets above every
+    drink poster ("ICED", "MILKSHAKE", "100% NATURAL").
+  */
+  .eyebrow {
+    font-family: var(--font-sans);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--color-taupe);
+  }
+
+  /* Editorial measure for running copy. */
+  .prose-measure {
+    max-width: 46ch;
+    line-height: 1.7;
+    color: var(--color-taupe);
+  }
+}
+
+/*
+  Scroll reveal. Elements start displaced and settle once seen. Under
+  prefers-reduced-motion the displacement never applies, so nothing moves and
+  nothing depends on JavaScript to become visible.
+*/
+@media (prefers-reduced-motion: no-preference) {
+  [data-reveal] {
+    opacity: 0;
+    transform: translateY(22px);
+    transition:
+      opacity 0.9s var(--ease-settle),
+      transform 0.9s var(--ease-settle);
+    transition-delay: var(--reveal-delay, 0ms);
+  }
+
+  [data-reveal="shown"] {
+    opacity: 1;
+    transform: none;
+  }
+
+  .drift {
+    animation: drift 22s var(--ease-drift) infinite alternate;
+  }
+}
+
+/*
+  The cat portraits are zoomed about a point above centre. The horizontal half
+  of that origin has to mirror, or every cat sits off-centre in Arabic.
+*/
+[dir="rtl"] .cat-portrait {
+  transform-origin: 50% 22%;
+}
+
+/*
+  The residents strip. The list is rendered twice and translated by exactly half
+  its width, so the loop is seamless. With motion reduced it stops and becomes a
+  normal horizontal scroller instead — the names are still all reachable.
+*/
+.marquee {
+  overflow: hidden;
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 5rem,
+    #000 calc(100% - 5rem),
+    transparent
+  );
+}
+
+.marquee__track {
+  width: max-content;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .marquee__track {
+    animation: marquee 64s linear infinite;
+  }
+
+  .marquee:hover .marquee__track,
+  .marquee:focus-within .marquee__track {
+    animation-play-state: paused;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee {
+    overflow-x: auto;
+    mask-image: none;
+  }
+}
+
+@keyframes marquee {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    /* Half the doubled track, plus half the gap that follows the first copy. */
+    transform: translate3d(calc(-50% - 1.5rem), 0, 0);
+  }
+}
+
+/* Right-to-left reading means the strip should travel the other way. */
+[dir="rtl"] .marquee__track {
+  animation-direction: reverse;
+}
+
+@keyframes drift {
+  from {
+    transform: scale(1.04) translate3d(0, 0, 0);
+  }
+  to {
+    transform: scale(1.12) translate3d(0, -1.5%, 0);
+  }
+}
+
+/*
+  Print. The menu page is meant to come out of a printer as a usable A4 card, so
+  backgrounds are dropped, links stop announcing their URLs, and nothing is
+  allowed to break across a column mid-item.
+*/
+@media print {
+  @page {
+    margin: 14mm 12mm;
+  }
+
+  :root {
+    --color-cream: #fff;
+    --color-shell: #fff;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  a[href]::after {
+    content: none;
+  }
+
+  li,
+  figure,
+  section {
+    break-inside: avoid;
+  }
+}

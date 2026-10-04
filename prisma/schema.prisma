@@ -1,0 +1,378 @@
+// HEYCAT Digital — data model.
+//
+// SQLite by default: the owner's deployment is a single café, the whole dataset
+// is a few hundred rows, and it must run with no cloud account and no Docker.
+// Nothing here is SQLite-specific except the provider — point `DATABASE_URL` at
+// Postgres and change one line to move.
+//
+// TRANSLATIONS: every piece of owner-facing copy is a `Json` column shaped
+// `{ fr: "...", en: "...", ar: "..." }` rather than a separate translation
+// table. One café, three locales, and the admin edits all three on one screen —
+// a join table would add a lot of machinery for no gain. `src/lib/i18n-field.ts`
+// is the only place that reads these, so the shape is enforced in one spot.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7 moved the connection URL out of the schema: Migrate reads it from
+// prisma.config.ts, and the client gets a driver adapter (src/lib/db.ts).
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------------------------------------------------------------- access
+
+model Admin {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  passwordHash String
+  role         String    @default("owner") // owner | staff
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+}
+
+/// Server-side sessions, so a login can actually be revoked.
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  adminId   String
+  admin     Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+
+  @@index([adminId])
+}
+
+// ---------------------------------------------------------------- menu
+
+model MenuCategory {
+  id        String     @id @default(cuid())
+  slug      String     @unique
+  /// { fr, en, ar } — the category name as printed on the café's own menu.
+  name      Json
+  /// { fr, en, ar } — the line under the heading.
+  note      Json
+  /// "printed-menu" items carry prices; "instagram" ones are unpriced on purpose.
+  source    String     @default("printed-menu")
+  position  Int        @default(0)
+  published Boolean    @default(true)
+  items     MenuItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model MenuItem {
+  id          String       @id @default(cuid())
+  categoryId  String
+  category    MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  slug        String       @unique
+  /// { fr, en, ar } — item names are the café's own and usually identical
+  /// across locales; stored per-locale anyway so Arabic can differ.
+  name        Json
+  /// { fr, en, ar } — optional.
+  description Json?
+  /// Flavour variants, e.g. ["Classic", "Hazelnut"]. JSON array of strings.
+  flavours    Json?
+  /// In the smallest currency unit used by the café (DA). null = not priced.
+  price       Int?
+  imageId     String?
+  image       Media?       @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  /// A CSS custom-property name from the design system, e.g. "--color-matcha".
+  accent      String?
+  available   Boolean      @default(true)
+  featured    Boolean      @default(false)
+  position    Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([categoryId, position])
+}
+
+/// Add-ons that apply across drinks — the printed menu's OPTIONS block.
+model MenuOption {
+  id        String   @id @default(cuid())
+  /// { fr, en, ar }
+  name      Json
+  price     Int
+  available Boolean  @default(true)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------- cats
+
+model Cat {
+  id       String  @id @default(cuid())
+  slug     String  @unique
+  /// { fr, en, ar } — the cat's name. Usually the same in all three.
+  name     Json
+  /// { fr, en, ar } — "The king of HeyCat".
+  title    Json
+  /// { fr, en, ar }
+  breed    Json
+  /// { fr, en, ar } -> [{ label, value }] — the spec list on the café's cards.
+  traits   Json?
+  /// { fr, en, ar }
+  funFact  Json?
+  imageId  String?
+  image    Media?  @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  /// resident | fostered | former
+  status   String  @default("resident")
+  /// not-listed | available | reserved | adopted | info-only
+  adoption String  @default("not-listed")
+  /// { fr, en, ar } — optional note shown only when `adoption` is not "not-listed".
+  adoptionNote Json?
+  featured Boolean  @default(false)
+  published Boolean @default(true)
+  position Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------- floor plan
+
+/*
+ * A table on the café's floor.
+ *
+ * Geometry is stored as percentages of the plan, not pixels, so the map scales
+ * to any screen and the owner can nudge a table without touching code. The
+ * plan is drawn from these rows — there is no background image to fall out of
+ * date when the café rearranges.
+ */
+model Table {
+  id       String  @id @default(cuid())
+  /// What the guest sees and the staff say out loud: "table 7".
+  number   Int     @unique
+  /// { fr, en, ar } — optional name, e.g. "the window banquette".
+  label    Json?
+  seats    Int     @default(2)
+  /// square | round | lounge | bar
+  shape    String  @default("square")
+  /// window | centre | lounge | wall | bar
+  zone     String  @default("centre")
+  /// Centre point and size, each 0–100 as a percentage of the plan.
+  x        Float
+  y        Float
+  width    Float   @default(8)
+  height   Float   @default(8)
+  /// Off for a table the café keeps for walk-ins, or one out of service.
+  bookable Boolean @default(true)
+  /// { fr, en, ar } — shown when someone hovers the table.
+  note     Json?
+  position Int     @default(0)
+
+  reservations Reservation[]
+
+  @@index([bookable])
+}
+
+// ---------------------------------------------------------------- reservations
+
+model Reservation {
+  id        String   @id @default(cuid())
+  /// Local calendar date, stored as YYYY-MM-DD so no timezone can shift it.
+  date      String
+  /// Local time, HH:MM, 24h.
+  time      String
+  guests    Int
+  name      String
+  phone     String
+  email     String?
+  message   String?
+  /// pending | confirmed | rejected | cancelled | completed
+  status    String   @default("pending")
+  adminNote String?
+  locale    String   @default("fr")
+  /// Optional: the guest may pick a table, or leave it to the café.
+  tableId   String?
+  table     Table?   @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date, status])
+  @@index([status, createdAt])
+  @@index([tableId, date])
+}
+
+// ---------------------------------------------------------------- content
+
+model Event {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  /// { fr, en, ar }
+  title       Json
+  /// { fr, en, ar }
+  description Json?
+  /// { fr, en, ar } — where in the café, if it matters.
+  location    Json?
+  /// { fr, en, ar }
+  ctaLabel    Json?
+  ctaUrl      String?
+  /// YYYY-MM-DD
+  date        String
+  /// HH:MM, optional.
+  time        String?
+  imageId     String?
+  image       Media?   @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  published   Boolean  @default(false)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date, published])
+}
+
+/// "Today at HEYCAT" — the Cake Of The Day slot the printed menu invites.
+model Feature {
+  id          String   @id @default(cuid())
+  /// { fr, en, ar }
+  title       Json
+  /// { fr, en, ar }
+  description Json?
+  price       Int?
+  imageId     String?
+  image       Media?   @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  /// YYYY-MM-DD the feature is for. One per day is the intent, not a rule.
+  date        String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date, active])
+}
+
+/*
+ * The boutique.
+ *
+ * The café sells its own things — cat-head teaspoons, mugs, bowls, tote bags.
+ * This is a catalogue, not a shop with a checkout: the café is a physical
+ * counter in Algeria, no payment provider was asked for, and a cart that cannot
+ * take money is worse than an honest "ask us". Each product links through to
+ * WhatsApp with its name already filled in, which is how these sales actually
+ * happen today.
+ */
+model ProductCategory {
+  id        String    @id @default(cuid())
+  slug      String    @unique
+  /// { fr, en, ar }
+  name      Json
+  /// { fr, en, ar } — a line under the heading.
+  note      Json?
+  position  Int       @default(0)
+  published Boolean   @default(true)
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Product {
+  id          String           @id @default(cuid())
+  slug        String           @unique
+  /// { fr, en, ar }
+  name        Json
+  /// { fr, en, ar } — a sentence or two. Shown on the product page.
+  description Json?
+  /// { fr, en, ar } — materials, size, care. Optional second block.
+  details     Json?
+  categoryId  String?
+  category    ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  /// The café's own reference, if it keeps one. Never shown to customers.
+  sku         String?
+  /// null = "ask at the counter". The café has never published boutique prices,
+  /// so an empty price stays meaningful rather than becoming a zero.
+  price       Int?
+  /// The card and the top of the gallery.
+  imageId     String?
+  image       Media?           @relation(fields: [imageId], references: [id], onDelete: SetNull)
+  /// Extra photographs, in order.
+  gallery     ProductImage[]
+  /// in-stock | low | out | unlisted
+  stock       String           @default("in-stock")
+  featured    Boolean          @default(false)
+  published   Boolean          @default(true)
+  position    Int              @default(0)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([categoryId, position])
+}
+
+/// Join row so one photograph can appear in several products' galleries.
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mediaId   String
+  media     Media   @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  position  Int     @default(0)
+
+  @@unique([productId, mediaId])
+  @@index([productId, position])
+}
+
+
+// ---------------------------------------------------------------- media
+
+model Media {
+  id        String   @id @default(cuid())
+  /// Public URL path, e.g. /uploads/2026/ab12cd.webp, or /img/... for the
+  /// assets the build pipeline generated from the café's own references.
+  url       String   @unique
+  filename  String
+  mime      String
+  bytes     Int
+  width     Int?
+  height    Int?
+  /// { fr, en, ar } — alt text. Never auto-filled; an empty alt is a decision.
+  alt       Json?
+  /// Set for files produced by scripts/prepare-assets.py, so the admin can warn
+  /// before deleting something the pipeline will simply put back.
+  generated Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  menuItems MenuItem[]
+  cats      Cat[]
+  events    Event[]
+  features  Feature[]
+  products  Product[]
+  productImages ProductImage[]
+}
+
+// ---------------------------------------------------------------- settings
+
+/// Single-row-per-key store for business information and configuration.
+/// Values are JSON so a key can hold a string, a list of opening hours, or a
+/// translated block without a schema change.
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------- analytics
+
+/// First-party, cookie-less event log. No third-party script, no personal data:
+/// a path, a type, a locale and a day. Enough for the owner's questions
+/// ("is anyone looking at the menu?") and nothing more.
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  /// page_view | menu_view | reservation_start | reservation_submit |
+  /// whatsapp_click | instagram_click | maps_click | menu_item_view
+  type      String
+  path      String?
+  locale    String?
+  /// Free-form context, e.g. { "slug": "catpuccino" }.
+  meta      Json?
+  /// YYYY-MM-DD, denormalised so the dashboard can group without date maths.
+  day       String
+  createdAt DateTime @default(now())
+
+  @@index([type, day])
+  @@index([day])
+}
