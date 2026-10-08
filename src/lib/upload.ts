@@ -8,17 +8,57 @@ import { db } from "./db";
 /*
  * Image uploads.
  *
- * Written to public/uploads and served straight off disk. That suits the
- * deployment this is built for — one café, one small server — and is the
- * limitation to know about: on a serverless host the filesystem is ephemeral,
- * so `saveUpload` is the single function to swap for S3 or similar.
+ * Written to disk and served straight off it. That suits the deployment this
+ * is built for — one café, one small server — and is the limitation to know
+ * about: on a serverless host the filesystem is ephemeral, so `saveUpload` is
+ * the single function to swap for S3 or similar.
+ *
+ * `public/uploads` by default, which `next start` serves at `/uploads/...`
+ * without any further configuration. `UPLOAD_DIR` moves it somewhere that
+ * survives a redeploy into a fresh directory — see the deployment notes in
+ * README-PLATFORM.md, which include the nginx block that then serves it.
  *
  * The extension on the uploaded filename is never trusted. The type is decided
  * by sniffing magic bytes, and the stored name is random, so nothing a visitor
  * sends can choose where it lands or what it is served as.
  */
 
-const MAX_BYTES = 8 * 1024 * 1024;
+export const MAX_BYTES = 8 * 1024 * 1024;
+
+/*
+ * The `turbopackIgnore` comments below tell the bundler not to trace these
+ * paths. It flags a dynamic `path.join` because it usually means "bundle the
+ * whole project"; here the path is a runtime location on the server's disk
+ * (`UPLOAD_DIR`, or `public/uploads`), which is nothing the build needs to see.
+ */
+
+/** Public URL prefix for anything uploaded through the dashboard. */
+const URL_PREFIX = "/uploads";
+
+/*
+ * Where uploads live on disk.
+ *
+ * Resolved per call rather than at module load so that it follows the process
+ * that is actually running, not whatever the build saw. Relative values are
+ * read against the working directory, which is how `public/uploads` keeps
+ * working with no configuration at all.
+ */
+export function uploadRoot(): string {
+  const configured = process.env.UPLOAD_DIR?.trim();
+  if (configured) return path.resolve(/*turbopackIgnore: true*/ process.cwd(), configured);
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), "public", "uploads");
+}
+
+/** The on-disk path for a stored URL, or null if it is not one of ours. */
+function fileFor(url: string): string | null {
+  if (!url.startsWith(`${URL_PREFIX}/`)) return null;
+  const relative = url.slice(URL_PREFIX.length + 1);
+  // The stored names are generated, never user input, but a path that escapes
+  // the upload root is not something to unlink on trust.
+  const resolved = path.resolve(/*turbopackIgnore: true*/ uploadRoot(), relative);
+  const root = uploadRoot();
+  return resolved.startsWith(root + path.sep) ? resolved : null;
+}
 
 const SIGNATURES: { mime: string; ext: string; test: (b: Buffer) => boolean }[] = [
   {
@@ -65,11 +105,25 @@ export async function saveUpload(file: File): Promise<UploadResult> {
 
   const year = String(new Date().getFullYear());
   const name = `${crypto.randomBytes(8).toString("hex")}.${match.ext}`;
-  const dir = path.join(process.cwd(), "public", "uploads", year);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, name), bytes);
+  const dir = path.join(/*turbopackIgnore: true*/ uploadRoot(), year);
 
-  const url = `/uploads/${year}/${name}`;
+  /*
+   * A server that cannot write where it was told is the most likely way this
+   * fails once it leaves a laptop — a missing folder, or one owned by another
+   * user. Saying which directory and why beats a 500 the owner cannot read.
+   */
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(/*turbopackIgnore: true*/ dir, name), bytes);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    return {
+      ok: false,
+      error: `The image could not be written to ${dir}. The server needs write access to that folder. (${reason})`,
+    };
+  }
+
+  const url = `${URL_PREFIX}/${year}/${name}`;
   const row = await db.media.create({
     data: {
       url,
@@ -157,10 +211,9 @@ export async function deleteMedia(id: string): Promise<{ error?: string }> {
     return { error: `That image is still used in ${used} place(s). Remove it there first.` };
   }
 
-  if (!media.generated && media.url.startsWith("/uploads/")) {
-    await fs
-      .unlink(path.join(process.cwd(), "public", media.url))
-      .catch(() => {});
+  if (!media.generated) {
+    const file = fileFor(media.url);
+    if (file) await fs.unlink(file).catch(() => {});
   }
   await db.media.delete({ where: { id } });
   return {};

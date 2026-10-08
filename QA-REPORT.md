@@ -16,7 +16,7 @@ or responsive sign-off**. See "Not verified" at the end.
 | --- | --- |
 | `tsc --noEmit` | clean |
 | `eslint src` | clean |
-| `next build` | compiles, 28 routes generated |
+| `next build` | compiles, 29 routes generated |
 | Static | `/{fr,en,ar}/menu` and `/{fr,en,ar}/boutique` prerendered |
 | Dynamic | homepage + all admin, as intended |
 
@@ -140,6 +140,53 @@ browser with JavaScript disabled would — multipart body, the action's own
 
 ---
 
+## Media upload
+
+Added after the site went live on a VPS, where uploading an image did not work.
+Real files, pushed through the real form over HTTP — the gap this report
+previously admitted to.
+
+### What was wrong in production
+
+| Bug | Symptom | Cause |
+| --- | --- | --- |
+| **Server Action bodies capped at 1MB** | any photograph off a phone failed with a bare `500` | Next's default `serverActions.bodySizeLimit`, applied before the app's own 8 MB check. Proven against the live host: a 1.6 MB action post returned 500, a 200 KB one with the same shape returned 303 |
+| **`public/` is fixed at build time** | upload succeeded, row created, image 404'd | Files written into `public/` after `next build` are not served. `next dev` reads the folder per request, so this cannot happen locally |
+
+Neither was nginx: a 13 MB body reaches the application on that host, and a
+2.2 MB POST to a route handler returns the app's own `400`.
+
+### After the fix
+
+| Check | Result |
+| --- | --- |
+| Upload a real 2.2 MB JPEG | accepted, "Image uploaded." |
+| It appears in the library with its dimensions | yes, 1700×1300 read from the header |
+| **The file is served** | 200, `image/jpeg`, **byte-for-byte identical** |
+| Cache header | `public, max-age=31536000, immutable` — safe, the filename is 16 random hex characters |
+| `next/image` can optimise it | 200, 2.16 MB → 69 KB at `w=640` |
+| A 10.4 MB file | "That image is 10.4 MB. The limit is 8 MB." — a sentence, not a 500 |
+| A 30 MB file | refused by the framework; the browser-side guard catches it before it is sent |
+| 1.5 MB of random bytes named `.jpg` | "That file is not a JPEG, PNG, WebP or GIF image." — decided on magic bytes |
+| Delete an uploaded image | row gone, file gone from disk, URL 404s |
+| `UPLOAD_DIR` pointing outside the project | file written there, nothing in `public/`, still served correctly, still deletable |
+| Path traversal: `/uploads/../../package.json`, `..%2f`, `....//`, nested | all refused |
+| Non-image extension via the route | 404 |
+| Build-time files under `public/img` | still served, unaffected |
+
+### Observed once, not reproduced
+
+On the **first** write after a fresh `next start`, two assertions saw a stale
+`/fr/boutique` — a shelf that had just been hidden was still listed, and a
+product that had just been created was missing. Both suites then passed twice in
+a row against the warm server, and a direct probe showed invalidation taking
+effect on the very next request (create → present, hide → gone, each on the
+first GET). It looks like a regenerate-versus-invalidate race against the
+build-time prerender in the seconds after a restart. Not chased further; worth
+knowing that the first save after a deploy may need a reload.
+
+---
+
 ## Security
 
 | Check | Result |
@@ -221,8 +268,9 @@ into a 500.
   (`dir`, logical properties, mirrored marquee and portrait origin) but nobody
   has looked at them. **Do this before showing the client.**
 - **Arabic wording** — machine-written, needs a fluent reader.
-- Media upload was verified by unit-level reasoning and the validation path, not
-  by pushing a real file through the browser form.
+- Media upload is now verified with real files over HTTP (see above), but still
+  not by clicking the form in a browser — the client-side size guard in
+  `upload-field.tsx` is the one piece of it no test has exercised.
 - The boutique was verified over HTTP, like everything else here: no one has
   looked at the shop index, a product page or the gallery stack in a browser.
 - No load or concurrency testing.

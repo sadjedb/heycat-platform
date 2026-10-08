@@ -1,7 +1,9 @@
 import Image from "next/image";
 import { Badge, Button, Card, Flash, I18nInput, PageHeader } from "@/components/admin/ui";
+import { UploadField } from "@/components/admin/upload-field";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { MAX_BYTES } from "@/lib/upload";
 import { deleteMediaAction, updateAltAction, uploadAction } from "./actions";
 
 export const metadata = { title: "Media" };
@@ -26,13 +28,7 @@ export default async function MediaPage({
 
       <Card title="Upload an image">
         <form action={uploadAction} className="flex flex-wrap items-end gap-3">
-          <input
-            type="file"
-            name="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
-            required
-            className="text-[0.86rem] file:mr-3 file:rounded-full file:border-0 file:bg-espresso file:px-4 file:py-2 file:text-[0.78rem] file:tracking-[0.1em] file:text-cream file:uppercase"
-          />
+          <UploadField maxBytes={MAX_BYTES} />
           <Button type="submit">Upload</Button>
         </form>
       </Card>

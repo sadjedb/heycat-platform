@@ -34,6 +34,7 @@ npm start
 | `AUTH_SECRET` | yes | 32+ random bytes, base64. Signs nothing yet but reserved for cookie signing; **change it before deploying** |
 | `NEXT_PUBLIC_SITE_URL` | yes | Real origin. Feeds `metadataBase`, `robots.txt`, `sitemap.xml` |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | no | Override the seeded login |
+| `UPLOAD_DIR` | no | Where dashboard uploads are written. Defaults to `public/uploads`. Set it to a path outside the project if you deploy into a fresh directory each time, so photographs survive a redeploy |
 | `NEXT_PUBLIC_GOOGLE_MAPS_EMBED_KEY` | no | Only if you want a keyed Maps embed; the location block works without it |
 
 Generate a secret:
@@ -60,6 +61,90 @@ instead, and the first account created becomes the owner.
 | `db:seed` | Load the café's content. Idempotent — upserts by slug |
 | `db:studio` | Prisma's data browser |
 | `db:reset` | Drop and rebuild. Destroys everything |
+
+---
+
+## Deploying to a VPS
+
+Running behind nginx with `next start` is the deployment this is built for.
+Redeploying after a change:
+
+```bash
+git pull                      # or copy the files across
+npm install                   # only if dependencies changed
+npx prisma migrate deploy     # only if there are new migrations
+npm run build                 # required: the server serves the build, not the source
+# then restart the process (systemd, pm2, docker — whatever runs it)
+```
+
+**`npm run build` is not optional.** `next start` serves the last build; editing
+a file on the server changes nothing until it is rebuilt.
+
+### Two things that only break once it leaves a laptop
+
+Both of these were found on the live site and are fixed in this code. They are
+written down because the symptoms are confusing and the causes are invisible
+locally.
+
+**Server Action request bodies are capped at 1MB by default.** Uploads go
+through a Server Action, so every photograph off a phone was rejected by the
+framework before the app's own 8 MB check ever ran — and the rejection is a bare
+`500 Internal Server Error`, with nothing in the dashboard explaining it.
+`next.config.ts` now sets `experimental.serverActions.bodySizeLimit` to `12mb`,
+comfortably above the app's own 8 MB limit so that oversized files get a
+sentence instead of a crash.
+
+**Files written into `public/` after the build are never served.** Next decides
+what lives in `public/` when the project is built, so an uploaded image landed
+on disk correctly and then 404'd — a successful upload that renders as a broken
+image. `next dev` reads the folder on every request, which is exactly why this
+cannot be reproduced locally. Uploads are now served by
+`src/app/uploads/[...path]/route.ts`, which reads them off disk at request time.
+That route is also what makes `UPLOAD_DIR` work.
+
+### nginx
+
+No special configuration is needed beyond a normal proxy. One setting matters:
+
+```nginx
+client_max_body_size 12m;   # must be at least the bodySizeLimit above
+```
+
+If it is lower than the upload limit, nginx rejects large uploads with its own
+`413` before the app sees them. (On the current host it is already generous
+enough — a 13 MB body reaches the app.)
+
+### If uploads live outside the project
+
+Set `UPLOAD_DIR=/var/lib/heycat/uploads`, create it, and give it to the user the
+server runs as:
+
+```bash
+sudo mkdir -p /var/lib/heycat/uploads
+sudo chown -R <the-user-node-runs-as> /var/lib/heycat/uploads
+```
+
+Nothing else changes — the route above serves it. If you would rather nginx
+served those files directly, add a location block ahead of the proxy:
+
+```nginx
+location /uploads/ {
+  alias /var/lib/heycat/uploads/;
+  access_log off;
+  expires 1y;
+}
+```
+
+A folder the server cannot write to no longer produces a 500: the dashboard
+says which directory it tried and that it needs write access.
+
+### Server Action IDs across rebuilds
+
+Next rotates Server Action IDs between builds, so a browser tab left open on the
+old build gets "Failed to find Server Action" after a redeploy — a reload fixes
+it. Setting `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` to a fixed value keeps the IDs
+stable across builds, which matters more if the app is ever run as more than one
+process behind a load balancer.
 
 ---
 
@@ -187,9 +272,11 @@ Two menu questions carried over from the original build:
 
 Honest list, in rough order of how likely they are to matter.
 
-1. **Uploads are written to `public/uploads` on local disk.** Correct for a
-   single server; on a serverless host the filesystem is ephemeral.
-   `saveUpload` in `src/lib/upload.ts` is the one function to swap for S3.
+1. **Uploads are written to local disk** (`public/uploads`, or `UPLOAD_DIR`) and
+   served by a route handler. Correct for a single server; on a serverless host
+   the filesystem is ephemeral. `saveUpload` in `src/lib/upload.ts` is the one
+   function to swap for S3, and `src/app/uploads/[...path]/route.ts` the one to
+   delete afterwards.
 2. **The admin dashboard is English only.** The owner's language is French. The
    public site is fully trilingual; the dashboard is not. Adding it means one
    dictionary file and threading it the way the public site already does.
